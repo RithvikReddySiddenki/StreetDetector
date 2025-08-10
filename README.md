@@ -1,34 +1,33 @@
-StreetDetector is a Next.js web application for real-time YOLOv5 object detection — running entirely in your browser using ONNX Runtime Web.
-No backend server is required; the detection happens client-side using WebAssembly.
+StreetDetector
+StreetDetector is a high-performance Next.js web application for real-time YOLOv5 object detection, executed entirely in the browser using ONNX Runtime Web.
+By leveraging WebAssembly, the application performs all inference client-side, eliminating the need for a backend server and ensuring low-latency, private, and portable execution.
 
-Features
-Client-side inference with YOLOv5m in ONNX format — no Python backend needed.
+Key Features
+Fully Client-Side Inference – Runs YOLOv5m in ONNX format directly in the browser, with no Python backend required.
 
-Upload any image and detect objects directly in the browser.
+Instant Object Detection – Upload an image and detect objects immediately, without sending data to a server.
 
-Uses ONNX Runtime Web with WebAssembly for fast, portable execution.
+Optimized Execution – Uses ONNX Runtime Web with WebAssembly for fast, cross-platform performance.
 
-Letterbox preprocessing to preserve aspect ratio when resizing images.
+Letterbox Preprocessing – Maintains the original aspect ratio when resizing images for detection.
 
-Non-Maximum Suppression (NMS) to filter overlapping detections.
+Non-Maximum Suppression (NMS) – Reduces duplicate or overlapping detections for cleaner results.
 
-Draws bounding boxes and labels directly on the original image without dimming.
+Accurate Visualization – Draws bounding boxes and class labels directly over the original image without dimming or distortion.
 
-Responsive, large preview canvas for better visual clarity.
+Responsive UI – Large, adaptive preview canvas for enhanced visual clarity.
 
-Displays detection scores with class names.
+Detailed Results – Displays both detection scores and class names for identified objects.
 
-Built with Next.js 13+ App Router.
+Modern Framework – Built with Next.js 13+ App Router for scalability and maintainability.
 
-Deployed on Vercel for instant public access.
+Seamless Deployment – Hosted on Vercel for instant global access.
 
-Footer credit for Rithvik Reddy Siddenki.
-
-Tech Stack
-Frontend: Next.js, TypeScript, Tailwind CSS
+Technology Stack
+Frontend Framework: Next.js, TypeScript, Tailwind CSS
 
 Model Execution: ONNX Runtime Web (WASM backend)
 
 Model: YOLOv5m (exported to ONNX)
 
-Deployment: Vercel
+Deployment Platform: Vercel
