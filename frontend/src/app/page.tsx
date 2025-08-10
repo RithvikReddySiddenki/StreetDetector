@@ -303,7 +303,7 @@ export default function HomePage() {
         <header className="space-y-2">
           <h1 className="text-3xl font-semibold">StreetDetector</h1>
           <p className="text-neutral-300">
-            Upload an image and run YOLOv5 detection in your browser (ONNX WebAssembly).
+            Upload an image 
           </p>
         </header>
 
@@ -342,7 +342,7 @@ export default function HomePage() {
             />
           </div>
           <p className="text-sm text-neutral-400">
-            Tip: Model file should be at <code>/public/yolov5m.onnx</code>.
+            
           </p>
         </section>
 
