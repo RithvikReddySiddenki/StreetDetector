@@ -1,4 +1,3 @@
-StreetDetector
 StreetDetector is a high-performance Next.js web application for real-time YOLOv5 object detection, executed entirely in the browser using ONNX Runtime Web.
 By leveraging WebAssembly, the application performs all inference client-side, eliminating the need for a backend server and ensuring low-latency, private, and portable execution.
 
