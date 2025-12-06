@@ -1,8 +1,3 @@
-# backend/main.py
-# FastAPI + ONNX Runtime backend for YOLOv5 (COCO 80 classes)
-# POST /predict accepts an image; add ?render=true to get an annotated PNG image back.
-# Otherwise you get JSON with boxes.
-
 from fastapi import FastAPI, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
@@ -16,23 +11,22 @@ from typing import List, Tuple
 
 app = FastAPI()
 
+# Allow cross-origin requests so the frontend can call this API without issues
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # tighten later if you want
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# -----------------------------
-# Config
-# -----------------------------
+# Paths and model parameters used throughout the backend
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "data")
-MODEL_PATH = os.path.join(MODEL_DIR, "yolov5m.onnx")   # <- exported ONNX
-IMG_SIZE = 640   # yolov5 default
+MODEL_PATH = os.path.join(MODEL_DIR, "yolov5m.onnx")
+IMG_SIZE = 640
 CONF_THRES = 0.25
 IOU_THRES = 0.45
 
-# COCO classes
+# Class labels for YOLOv5 trained on COCO
 NAMES = [
     "person","bicycle","car","motorbike","aeroplane","bus","train","truck",
     "boat","traffic light","fire hydrant","stop sign","parking meter","bench",
@@ -46,15 +40,13 @@ NAMES = [
     "book","clock","vase","scissors","teddy bear","hair drier","toothbrush"
 ]
 
-# Will be set at startup
+# These will be assigned once the ONNX model is loaded
 ort_session = None
 ort_input_name = None
 
-# -----------------------------
-# Utils
-# -----------------------------
+
+# Resize the image while keeping its aspect ratio, then pad it to a square
 def letterbox(im: np.ndarray, new_shape=IMG_SIZE, color=(114, 114, 114)) -> Tuple[np.ndarray, float, Tuple[int, int]]:
-    """Resize + pad to square while keeping aspect ratio. Returns (padded_img, gain, (pad_w, pad_h))."""
     if isinstance(new_shape, int):
         new_shape = (new_shape, new_shape)
     h0, w0 = im.shape[:2]
@@ -70,20 +62,24 @@ def letterbox(im: np.ndarray, new_shape=IMG_SIZE, color=(114, 114, 114)) -> Tupl
     im = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
     return im, r, (left, top)
 
+
+# Convert YOLO box format (center x,y,w,h) to corner coordinates (x1,y1,x2,y2)
 def xywh2xyxy(x: np.ndarray) -> np.ndarray:
     y = np.copy(x)
-    y[:, 0] = x[:, 0] - x[:, 2] / 2  # x1
-    y[:, 1] = x[:, 1] - x[:, 3] / 2  # y1
-    y[:, 2] = x[:, 0] + x[:, 2] / 2  # x2
-    y[:, 3] = x[:, 1] + x[:, 3] / 2  # y2
+    y[:, 0] = x[:, 0] - x[:, 2] / 2
+    y[:, 1] = x[:, 1] - x[:, 3] / 2
+    y[:, 2] = x[:, 0] + x[:, 2] / 2
+    y[:, 3] = x[:, 1] + x[:, 3] / 2
     return y
 
+
+# Basic implementation of non-maximum suppression for one class
 def nms_boxes(boxes: np.ndarray, scores: np.ndarray, iou_thres: float) -> List[int]:
-    """Simple NMS over one class. boxes: (N,4) xyxy; returns kept indices."""
     x1, y1, x2, y2 = boxes.T
     areas = (x2 - x1) * (y2 - y1)
     order = scores.argsort()[::-1]
     keep = []
+
     while order.size > 0:
         i = order[0]
         keep.append(i)
@@ -97,54 +93,56 @@ def nms_boxes(boxes: np.ndarray, scores: np.ndarray, iou_thres: float) -> List[i
         ovr = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
         inds = np.where(ovr <= iou_thres)[0]
         order = order[inds + 1]
+
     return keep
 
+
+# Runs ONNX inference and returns the predicted bounding boxes
 def run_onnx(img_bgr: np.ndarray) -> np.ndarray:
-    """Run ONNX model and return raw prediction (N, 85) as in YOLOv5: [x,y,w,h,conf, 80 class confs]."""
     global ort_session, ort_input_name
+
+    # Preprocess image to match YOLOv5 input format
     im, gain, pad = letterbox(img_bgr, IMG_SIZE)
-    im = im[:, :, ::-1]  # BGR -> RGB
+    im = im[:, :, ::-1]
     im = im.astype(np.float32) / 255.0
-    im = np.transpose(im, (2, 0, 1))  # HWC -> CHW
-    im = np.expand_dims(im, 0)        # add batch
+    im = np.transpose(im, (2, 0, 1))
+    im = np.expand_dims(im, 0)
 
-    out = ort_session.run(None, {ort_input_name: im})[0]  # shape: (1, 25200, 85)
-    pred = out[0]  # (25200, 85)
+    # Run model forward pass
+    out = ort_session.run(None, {ort_input_name: im})[0]
+    pred = out[0]
 
-    # decode to xyxy on the padded image
+    # Decode predictions
     box = xywh2xyxy(pred[:, :4])
     conf = pred[:, 4:5]
     cls = pred[:, 5:]
-    scores = conf * cls  # (25200,80)
+    scores = conf * cls
 
-    # Select best class per box
     class_ids = scores.argmax(axis=1)
     class_scores = scores.max(axis=1)
 
-    # Filter by confidence
+    # Filter predictions below confidence threshold
     mask = class_scores >= CONF_THRES
     box = box[mask]
     class_ids = class_ids[mask]
     class_scores = class_scores[mask]
 
-    # Scale boxes back to original image size
-    # Current box coords are in padded image coordinates [0, IMG_SIZE]
-    # Undo padding and gain
+    # Convert padded coordinates back to original image scale
     if box.size:
-        box[:, [0, 2]] -= pad[0]   # x padding
-        box[:, [1, 3]] -= pad[1]   # y padding
+        box[:, [0, 2]] -= pad[0]
+        box[:, [1, 3]] -= pad[1]
         box /= gain
-        # clip
         h, w = img_bgr.shape[:2]
         box[:, 0] = np.clip(box[:, 0], 0, w - 1)
         box[:, 2] = np.clip(box[:, 2], 0, w - 1)
         box[:, 1] = np.clip(box[:, 1], 0, h - 1)
         box[:, 3] = np.clip(box[:, 3], 0, h - 1)
 
-    # NMS per class
+    # Apply NMS separately for each class
     final_boxes = []
     final_scores = []
     final_cls = []
+
     for c in np.unique(class_ids):
         idxs = np.where(class_ids == c)[0]
         keep = nms_boxes(box[idxs], class_scores[idxs], IOU_THRES)
@@ -152,69 +150,64 @@ def run_onnx(img_bgr: np.ndarray) -> np.ndarray:
         final_scores.append(class_scores[idxs][keep])
         final_cls.append(np.full(len(keep), c))
 
+    # Concatenate results into a single array
     if final_boxes:
         final_boxes = np.concatenate(final_boxes, axis=0)
         final_scores = np.concatenate(final_scores, axis=0)
         final_cls = np.concatenate(final_cls, axis=0).astype(int)
-    else:
-        final_boxes = np.zeros((0, 4), dtype=np.float32)
-        final_scores = np.zeros((0,), dtype=np.float32)
-        final_cls = np.zeros((0,), dtype=int)
-
-    # Stack into (N, 6): x1,y1,x2,y2,score,cls
-    if final_boxes.shape[0]:
         arr = np.concatenate(
-            [final_boxes,
-             final_scores.reshape(-1, 1),
-             final_cls.reshape(-1, 1)],
+            [final_boxes, final_scores.reshape(-1, 1), final_cls.reshape(-1, 1)],
             axis=1
         )
     else:
         arr = np.zeros((0, 6), dtype=np.float32)
 
-    return arr  # (N,6)
+    return arr
 
+
+# Draw detection results directly onto the image
 def draw_boxes(img_bgr: np.ndarray, det: np.ndarray) -> np.ndarray:
-    """Draw boxes on a copy of the original image (preserves original look)."""
     out = img_bgr.copy()
     for x1, y1, x2, y2, score, cls in det:
         x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
         cls = int(cls)
         label = f"{NAMES[cls]} {score:.2f}" if 0 <= cls < len(NAMES) else f"{cls} {score:.2f}"
-        # green box
+
         cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        # text background
+
         (tw, th), bl = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
         cv2.rectangle(out, (x1, y1 - th - 6), (x1 + tw + 2, y1), (0, 255, 0), -1)
-        cv2.putText(out, label, (x1 + 1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+        cv2.putText(out, label, (x1 + 1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, (0, 0, 0), 1, cv2.LINE_AA)
+
     return out
 
-# -----------------------------
-# Startup (load ONNX)
-# -----------------------------
+
+# Load the ONNX model once when the server starts
 @app.on_event("startup")
 def load_model():
     global ort_session, ort_input_name
+
     if not os.path.exists(MODEL_PATH):
         raise FileNotFoundError(
-            f"ONNX model not found at {MODEL_PATH}. Put yolov5m.onnx under backend/data/"
+            f"ONNX model not found at {MODEL_PATH}. Place yolov5m.onnx in backend/data/"
         )
-    # Providers: CPUExecutionProvider by default
+
     ort_session = ort.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
-    # Find first input name (usually 'images')
     ort_input_name = ort_session.get_inputs()[0].name
 
+
+# Basic health endpoint to verify the backend is running
 @app.get("/")
 def health():
     return {"ok": True, "model": os.path.basename(MODEL_PATH), "backend": "onnxruntime"}
 
-# -----------------------------
-# Main endpoint
-# -----------------------------
+
+# Main detection endpoint used by the frontend
 @app.post("/predict")
 async def predict(
     file: UploadFile = File(...),
-    render: bool = Query(False, description="Return PNG image with boxes if true"),
+    render: bool = Query(False),
     conf: float = Query(CONF_THRES, ge=0.0, le=1.0),
     iou: float = Query(IOU_THRES, ge=0.0, le=1.0),
 ):
@@ -222,16 +215,16 @@ async def predict(
     CONF_THRES = float(conf)
     IOU_THRES = float(iou)
 
-    # Read image
+    # Read uploaded image into a NumPy array
     img_bytes = await file.read()
     pil = Image.open(BytesIO(img_bytes)).convert("RGB")
     img_bgr = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
-    # Inference
-    det = run_onnx(img_bgr)  # (N,6): x1,y1,x2,y2,score,cls
-
+    # Produce detection results
+    det = run_onnx(img_bgr)
     h, w = img_bgr.shape[:2]
 
+    # If render=true, return the annotated PNG instead of JSON
     if render:
         vis = draw_boxes(img_bgr, det)
         ok, buf = cv2.imencode(".png", vis)
@@ -239,7 +232,7 @@ async def predict(
             return JSONResponse({"error": "render_failed"}, status_code=500)
         return Response(content=buf.tobytes(), media_type="image/png")
 
-    # JSON path
+    # Build JSON response for the frontend
     boxes = []
     for x1, y1, x2, y2, score, cls in det:
         cls = int(cls)
@@ -251,4 +244,5 @@ async def predict(
             "label": NAMES[cls] if 0 <= cls < len(NAMES) else str(cls),
             "score": float(round(score, 6)),
         })
+
     return {"boxes": boxes, "width": w, "height": h}
